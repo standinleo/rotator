@@ -3,25 +3,30 @@ name: Rotate GitHub PAT
 on:
   schedule:
     - cron: '0 3 * * 0'      # Every Sunday at 3:00 AM UTC
-  workflow_dispatch:         # Allows manual trigger from GitHub UI
+  workflow_dispatch:         # Manual trigger (recommended way)
     inputs:
       new_token_value:
-        description: 'Paste the NEW PAT value here'
+        description: 'Paste your NEW GitHub PAT here'
         required: true
         type: string
 
 jobs:
   rotate:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
-      - name: Validate input (for manual runs)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Check for new token
+        id: token
         run: |
-          if [ -z "${{ inputs.new_token_value }}" ]; then
-            echo "❌ No new token provided!"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [ -z "${{ inputs.new_token_value }}" ]; then
+              echo "❌ No token provided via workflow_dispatch"
+              exit 1
+            fi
+            echo "NEW_TOKEN=${{ inputs.new_token_value }}" >> $GITHUB_OUTPUT
+            echo "✅ New token received from manual trigger"
+          else
+            echo "❌ Scheduled runs require manual input. Please trigger manually."
             exit 1
           fi
 
@@ -48,12 +53,7 @@ jobs:
             const sodium = require('libsodium-wrappers');
             await sodium.ready;
 
-            const newToken = '${{ github.event_name == "workflow_dispatch" ? inputs.new_token_value : "placeholder" }}';
-            
-            if (newToken === "placeholder") {
-              core.setFailed("No new token provided. Use workflow_dispatch with input.");
-              return;
-            }
+            const newToken = '${{ steps.token.outputs.NEW_TOKEN }}';
 
             const key = Buffer.from('${{ steps.get-key.outputs.key }}', 'base64');
             const encryptedBytes = sodium.crypto_box_seal(newToken, key);
@@ -70,14 +70,8 @@ jobs:
             await github.rest.actions.createOrUpdateRepoSecret({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              secret_name: 'MY_DEPLOY_TOKEN',           // ← Change this to your secret name
+              secret_name: 'MY_DEPLOY_TOKEN',        # ← CHANGE THIS to your actual secret name
               encrypted_value: '${{ steps.encrypt.outputs.encrypted_value }}',
               key_id: '${{ steps.get-key.outputs.key_id }}'
             });
-            console.log('✅ Secret MY_DEPLOY_TOKEN updated successfully!');
-
-      - name: Notify (Optional)
-        if: always()
-        run: |
-          echo "🔄 PAT rotation completed at $(date)"
-          echo "Next rotation scheduled for next Sunday."
+            console.log('✅ Secret MY_DEPLOY_TOKEN has been successfully updated!');
