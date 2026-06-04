@@ -21,8 +21,7 @@ jobs:
       - name: Install libsodium
         run: npm install libsodium-wrappers
 
-      - name: Validate and Prepare Token
-        id: token
+      - name: Save new token to file
         env:
           NEW_TOKEN: ${{ inputs.new_token_value }}
         run: |
@@ -30,8 +29,8 @@ jobs:
             echo "❌ No new token provided"
             exit 1
           fi
-          echo "NEW_TOKEN_SET=true" >> $GITHUB_OUTPUT
-          echo "✅ Token prepared (length: ${#NEW_TOKEN})"
+          echo -n "$NEW_TOKEN" > new_token.txt
+          echo "✅ Token saved to file (length: ${#NEW_TOKEN})"
 
       - name: Get Repository Public Key
         id: get-key
@@ -50,15 +49,14 @@ jobs:
       - name: Encrypt New Token
         id: encrypt
         uses: actions/github-script@v9
-        env:
-          NEW_TOKEN: ${{ inputs.new_token_value }}
         with:
           github-token: ${{ secrets.ROTATION_TOKEN }}
           script: |
+            const fs = require('fs');
             const sodium = require('libsodium-wrappers');
             await sodium.ready;
 
-            const newToken = process.env.NEW_TOKEN;
+            const newToken = fs.readFileSync('new_token.txt', 'utf8').trim();
             if (!newToken) {
               throw new Error("New token is empty");
             }
