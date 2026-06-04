@@ -1,0 +1,83 @@
+name: Rotate GitHub PAT
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'      # Every Sunday at 3:00 AM UTC
+  workflow_dispatch:         # Allows manual trigger from GitHub UI
+    inputs:
+      new_token_value:
+        description: 'Paste the NEW PAT value here'
+        required: true
+        type: string
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Validate input (for manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ -z "${{ inputs.new_token_value }}" ]; then
+            echo "❌ No new token provided!"
+            exit 1
+          fi
+
+      - name: Get Repository Public Key
+        id: get-key
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ROTATION_TOKEN }}
+          script: |
+            const response = await github.rest.actions.getRepoPublicKey({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            core.setOutput('key_id', response.data.key_id);
+            core.setOutput('key', response.data.key);
+            console.log('✅ Repository public key retrieved');
+
+      - name: Encrypt New Token
+        id: encrypt
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ROTATION_TOKEN }}
+          script: |
+            const sodium = require('libsodium-wrappers');
+            await sodium.ready;
+
+            const newToken = '${{ github.event_name == "workflow_dispatch" ? inputs.new_token_value : "placeholder" }}';
+            
+            if (newToken === "placeholder") {
+              core.setFailed("No new token provided. Use workflow_dispatch with input.");
+              return;
+            }
+
+            const key = Buffer.from('${{ steps.get-key.outputs.key }}', 'base64');
+            const encryptedBytes = sodium.crypto_box_seal(newToken, key);
+            const encrypted = Buffer.from(encryptedBytes).toString('base64');
+
+            core.setOutput('encrypted_value', encrypted);
+            console.log('✅ Token encrypted successfully');
+
+      - name: Update Repository Secret
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ROTATION_TOKEN }}
+          script: |
+            await github.rest.actions.createOrUpdateRepoSecret({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              secret_name: 'MY_DEPLOY_TOKEN',           // ← Change this to your secret name
+              encrypted_value: '${{ steps.encrypt.outputs.encrypted_value }}',
+              key_id: '${{ steps.get-key.outputs.key_id }}'
+            });
+            console.log('✅ Secret MY_DEPLOY_TOKEN updated successfully!');
+
+      - name: Notify (Optional)
+        if: always()
+        run: |
+          echo "🔄 PAT rotation completed at $(date)"
+          echo "Next rotation scheduled for next Sunday."
