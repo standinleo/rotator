@@ -11,8 +11,6 @@ on:
 jobs:
   rotate:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
       - name: Setup Node.js
@@ -20,18 +18,20 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install libsodium-wrappers
+      - name: Install libsodium
         run: npm install libsodium-wrappers
 
-      - name: Check for new token
+      - name: Validate and Prepare Token
         id: token
+        env:
+          NEW_TOKEN: ${{ inputs.new_token_value }}
         run: |
-          if [ -z "${{ inputs.new_token_value }}" ]; then
-            echo "❌ No token provided"
+          if [ -z "$NEW_TOKEN" ]; then
+            echo "❌ No new token provided"
             exit 1
           fi
-          echo "NEW_TOKEN=${{ inputs.new_token_value }}" >> $GITHUB_OUTPUT
-          echo "✅ New token received"
+          echo "NEW_TOKEN_SET=true" >> $GITHUB_OUTPUT
+          echo "✅ Token prepared (length: ${#NEW_TOKEN})"
 
       - name: Get Repository Public Key
         id: get-key
@@ -50,15 +50,20 @@ jobs:
       - name: Encrypt New Token
         id: encrypt
         uses: actions/github-script@v9
+        env:
+          NEW_TOKEN: ${{ inputs.new_token_value }}
         with:
           github-token: ${{ secrets.ROTATION_TOKEN }}
           script: |
             const sodium = require('libsodium-wrappers');
             await sodium.ready;
 
-            const newToken = '${{ steps.token.outputs.NEW_TOKEN }}';
-            const key = Buffer.from('${{ steps.get-key.outputs.key }}', 'base64');
+            const newToken = process.env.NEW_TOKEN;
+            if (!newToken) {
+              throw new Error("New token is empty");
+            }
 
+            const key = Buffer.from('${{ steps.get-key.outputs.key }}', 'base64');
             const encryptedBytes = sodium.crypto_box_seal(newToken, key);
             const encrypted = Buffer.from(encryptedBytes).toString('base64');
 
@@ -73,7 +78,7 @@ jobs:
             await github.rest.actions.createOrUpdateRepoSecret({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              secret_name: 'MY_DEPLOY_TOKEN',   # ← CHANGE THIS to your secret name
+              secret_name: 'MY_DEPLOY_TOKEN',     # ← CHANGE to your actual secret name
               encrypted_value: '${{ steps.encrypt.outputs.encrypted_value }}',
               key_id: '${{ steps.get-key.outputs.key_id }}'
             });
